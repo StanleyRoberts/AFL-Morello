@@ -106,17 +106,17 @@ static void edit_params(u32 argc, char** argv) {
   u8 fortify_set = 0, asan_set = 0, x_set = 0, bit_mode = 0;
   u8 *name;
 
-  cc_params = ck_alloc((argc + 128) * sizeof(u8*));
+  cc_params = malloc((argc + 128) * sizeof(u8*));
 
   name = strrchr(argv[0], '/');
   if (!name) name = argv[0]; else name++;
 
   if (!strcmp(name, "afl-clang-fast++")) {
     u8* alt_cxx = getenv("AFL_CXX");
-    cc_params[0] = alt_cxx ? alt_cxx : (u8*)"clang++";
+    cc_params[0] = alt_cxx ? alt_cxx : (u8*)"c++";
   } else {
     u8* alt_cc = getenv("AFL_CC");
-    cc_params[0] = alt_cc ? alt_cc : (u8*)"clang";
+    cc_params[0] = alt_cc ? alt_cc : (u8*)"cc";
   }
 
   /* There are two ways to compile afl-clang-fast. In the traditional mode, we
@@ -133,10 +133,12 @@ static void edit_params(u32 argc, char** argv) {
   cc_params[cc_par_cnt++] = "-sanitizer-coverage-block-threshold=0";
 #endif
 #else
-  cc_params[cc_par_cnt++] = "-Xclang";
+  cc_params[cc_par_cnt++] = alloc_printf("-fpass-plugin=%s/afl-llvm-pass.so", obj_path);
+  /*
   cc_params[cc_par_cnt++] = "-load";
   cc_params[cc_par_cnt++] = "-Xclang";
   cc_params[cc_par_cnt++] = alloc_printf("%s/afl-llvm-pass.so", obj_path);
+  */
 #endif /* ^USE_TRACE_PC */
 
   cc_params[cc_par_cnt++] = "-Qunused-arguments";

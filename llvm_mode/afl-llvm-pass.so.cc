@@ -38,6 +38,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 
+#include "llvm/Passes/PassPlugin.h"
+#include "llvm/Passes/PassBuilder.h"
+#include "llvm/IR/PassManager.h"
+
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -49,14 +53,12 @@ using namespace llvm;
 
 namespace {
 
-  class AFLCoverage : public ModulePass {
+  class AFLCoverage : public PassInfoMixin<AFLCoverage> {
 
     public:
+      AFLCoverage() {}
 
-      static char ID;
-      AFLCoverage() : ModulePass(ID) { }
-
-      bool runOnModule(Module &M) override;
+      PreservedAnalyses run(Module &M, ModuleAnalysisManager &MAM);
 
       // StringRef getPassName() const override {
       //  return "American Fuzzy Lop Instrumentation";
@@ -67,15 +69,35 @@ namespace {
 }
 
 
-char AFLCoverage::ID = 0;
+extern "C" ::llvm::PassPluginLibraryInfo LLVM_ATTRIBUTE_WEAK
+llvmGetPassPluginInfo() {
 
+  return {LLVM_PLUGIN_API_VERSION, "AFLCoverage", "v0.1",
+          /* lambda to insert our pass into the pass pipeline. */
+          [](PassBuilder &PB) {
 
-bool AFLCoverage::runOnModule(Module &M) {
+#if LLVM_VERSION_MAJOR <= 13
+        using OptimizationLevel = typename PassBuilder::OptimizationLevel;
+#endif
+        PB.registerOptimizerLastEPCallback(
+            [](ModulePassManager &MPM, OptimizationLevel OL) {
+
+              MPM.addPass(AFLCoverage());
+
+            });
+      }};
+}
+
+#define AFL_HAVE_VECTOR_INTRINSICS 1
+
+PreservedAnalyses AFLCoverage::run(Module &M, ModuleAnalysisManager &MAM) {
 
   LLVMContext &C = M.getContext();
 
   IntegerType *Int8Ty  = IntegerType::getInt8Ty(C);
   IntegerType *Int32Ty = IntegerType::getInt32Ty(C);
+
+  auto PA = PreservedAnalyses::all();
 
   /* Show a banner */
 
@@ -104,12 +126,12 @@ bool AFLCoverage::runOnModule(Module &M) {
      __afl_prev_loc is thread-local. */
 
   GlobalVariable *AFLMapPtr =
-      new GlobalVariable(M, PointerType::get(Int8Ty, 0), false,
+      new GlobalVariable(M, PointerType::get(Int8Ty, 200), false,
                          GlobalValue::ExternalLinkage, 0, "__afl_area_ptr");
 
   GlobalVariable *AFLPrevLoc = new GlobalVariable(
       M, Int32Ty, false, GlobalValue::ExternalLinkage, 0, "__afl_prev_loc",
-      0, GlobalVariable::GeneralDynamicTLSModel, 0, false);
+      0, GlobalVariable::GeneralDynamicTLSModel, 200, false);
 
   /* Instrument all the things! */
 
@@ -131,20 +153,20 @@ bool AFLCoverage::runOnModule(Module &M) {
 
       /* Load prev_loc */
 
-      LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc);
+      LoadInst *PrevLoc = IRB.CreateLoad(AFLPrevLoc);//IRB.getInt32Ty(), AFLPrevLoc);
       PrevLoc->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *PrevLocCasted = IRB.CreateZExt(PrevLoc, IRB.getInt32Ty());
 
       /* Load SHM pointer */
 
-      LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);
+      LoadInst *MapPtr = IRB.CreateLoad(AFLMapPtr);//PointerType::get(Int8Ty, 0), AFLMapPtr);
       MapPtr->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *MapPtrIdx =
-          IRB.CreateGEP(MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
+          IRB.CreateGEP(Int8Ty, MapPtr, IRB.CreateXor(PrevLocCasted, CurLoc));
 
       /* Update bitmap */
 
-      LoadInst *Counter = IRB.CreateLoad(MapPtrIdx);
+      LoadInst *Counter = IRB.CreateLoad(IRB.getInt8Ty(), MapPtrIdx);
       Counter->setMetadata(M.getMDKindID("nosanitize"), MDNode::get(C, None));
       Value *Incr = IRB.CreateAdd(Counter, ConstantInt::get(Int8Ty, 1));
       IRB.CreateStore(Incr, MapPtrIdx)
@@ -172,11 +194,11 @@ bool AFLCoverage::runOnModule(Module &M) {
 
   }
 
-  return true;
+  return PA;
 
 }
 
-
+/*
 static void registerAFLPass(const PassManagerBuilder &,
                             legacy::PassManagerBase &PM) {
 
@@ -184,9 +206,12 @@ static void registerAFLPass(const PassManagerBuilder &,
 
 }
 
+static RegisterPass<AFLCoverage> X("AFL", "AFL ModulePass", false, false);
+
 
 static RegisterStandardPasses RegisterAFLPass(
     PassManagerBuilder::EP_ModuleOptimizerEarly, registerAFLPass);
 
 static RegisterStandardPasses RegisterAFLPass0(
     PassManagerBuilder::EP_EnabledOnOptLevel0, registerAFLPass);
+*/
